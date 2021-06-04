@@ -1,14 +1,20 @@
 #include <FS.h>
 #include <EEPROM.h>
 #include <DNSServer.h>
-#include <ESP8266WiFi.h>
 #include <Ticker.h>
-#include <WiFiManager.h>
-#include <ESP8266mDNS.h>
+#include <IotWebConf.h>
+#include <IotWebConfUsing.h>
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
 #include <PubSubClient.h>
-#include <SoftwareSerial.h>
+#if defined(ESP8266)
+//#include <ESP8266WiFi.h>
+//#include <ESP8266mDNS.h>
+    HardwareSerial recievingSerial = Serial;
+#endif
+#if defined(ESP32)
+    HardwareSerial recievingSerial = Serial2;
+#endif
 
 // * Include settings
 #include "settings.h"
@@ -19,37 +25,27 @@ Ticker ticker;
 // * Initiate WIFI client
 WiFiClient espClient;
 
+DNSServer dnsServer;
+WebServer server(80);
+WiFiClient net;
+
+char mqttServerValue[STRING_LEN];
+char mqttPortValue[5];
+char mqttUserNameValue[STRING_LEN];
+char mqttUserPasswordValue[STRING_LEN];
+
+IotWebConf iotWebConf(thingName, &dnsServer, &server, wifiInitialApPassword, CONFIG_VERSION);
+IotWebConfParameterGroup mqttGroup = IotWebConfParameterGroup("mqtt", "MQTT configuration");
+IotWebConfTextParameter mqttServerParam = IotWebConfTextParameter("MQTT server", "mqttServer", mqttServerValue, STRING_LEN);
+IotWebConfNumberParameter mqttPortParam = IotWebConfNumberParameter("MQTT port", "mqttPort", mqttPortValue, 5, "1883");
+IotWebConfTextParameter mqttUserNameParam = IotWebConfTextParameter("MQTT user", "mqttUser", mqttUserNameValue, STRING_LEN);
+IotWebConfPasswordParameter mqttUserPasswordParam = IotWebConfPasswordParameter("MQTT password", "mqttPass", mqttUserPasswordValue, STRING_LEN);
+
+bool needMqttConnect = false;
+bool needReset = false;
+
 // * Initiate MQTT client
 PubSubClient mqtt_client(espClient);
-
-// **********************************
-// * WIFI                           *
-// **********************************
-
-// * Gets called when WiFiManager enters configuration mode
-void configModeCallback(WiFiManager *myWiFiManager)
-{
-    Serial.println(F("Entered config mode"));
-    Serial.println(WiFi.softAPIP());
-
-    // * If you used auto generated SSID, print it
-    Serial.println(myWiFiManager->getConfigPortalSSID());
-
-    // * Entered config mode, make led toggle faster
-    ticker.attach(0.2, tick);
-}
-
-// **********************************
-// * Ticker (System LED Blinker)    *
-// **********************************
-
-// * Blink on-board Led
-void tick()
-{
-    // * Toggle state
-    int state = digitalRead(LED_BUILTIN);    // * Get the current state of GPIO1 pin
-    digitalWrite(LED_BUILTIN, !state);       // * Set pin to the opposite state
-}
 
 // **********************************
 // * MQTT                           *
@@ -69,19 +65,45 @@ void send_mqtt_message(const char *topic, char *payload)
     }
 }
 
+/**
+ * Handle web requests to "/" path.
+ */
+void handleRoot()
+{
+  // -- Let IotWebConf test and handle captive portal requests.
+  if (iotWebConf.handleCaptivePortal())
+  {
+    // -- Captive portal request were already served.
+    return;
+  }
+  String s = "<!DOCTYPE html><html lang=\"en\"><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, user-scalable=no\"/>";
+  s += "<title>ESP_p1meter</title></head><body>";
+  s += "<ul>";
+  s += "<li>MQTT server: ";
+  s += mqttServerValue;
+  s += "</ul>";
+  s += "Go to <a href='config'>configure page</a> to change values.";
+  s += "</body></html>\n";
+
+  server.send(200, "text/html", s);
+}
+
+
 // * Reconnect to MQTT server and subscribe to in and out topics
 bool mqtt_reconnect()
 {
     // * Loop until we're reconnected
     int MQTT_RECONNECT_RETRIES = 0;
-
+    
     while (!mqtt_client.connected() && MQTT_RECONNECT_RETRIES < MQTT_MAX_RECONNECT_TRIES)
     {
         MQTT_RECONNECT_RETRIES++;
         Serial.printf("MQTT connection attempt %d / %d ...\n", MQTT_RECONNECT_RETRIES, MQTT_MAX_RECONNECT_TRIES);
+        // * Setup MQTT
+        Serial.printf("MQTT connecting to: %s:%s User %s Pass %s\n", mqttServerValue, mqttPortValue, mqttUserNameValue, mqttUserPasswordValue);
 
         // * Attempt to connect
-        if (mqtt_client.connect(HOSTNAME, MQTT_USER, MQTT_PASS))
+        if (mqtt_client.connect(HOSTNAME, mqttUserNameValue, mqttUserPasswordValue))
         {
             Serial.println(F("MQTT connected!"));
 
@@ -89,7 +111,8 @@ bool mqtt_reconnect()
             char *message = new char[16 + strlen(HOSTNAME) + 1];
             strcpy(message, "p1 meter alive: ");
             strcat(message, HOSTNAME);
-            mqtt_client.publish("hass/status", message);
+            // TODO set to homeassistant/status
+            mqtt_client.publish("hass/status", message); 
 
             Serial.printf("MQTT root topic: %s\n", MQTT_ROOT_TOPIC);
         }
@@ -101,7 +124,8 @@ bool mqtt_reconnect()
             Serial.println("");
 
             // * Wait 5 seconds before retrying
-            delay(5000);
+            yield();
+            iotWebConf.delay(2000);
         }
     }
 
@@ -415,15 +439,20 @@ bool decode_telegram(int len)
 
 void read_p1_hardwareserial()
 {
-    if (Serial.available())
+    if (recievingSerial.available())
     {
         memset(telegram, 0, sizeof(telegram));
 
-        while (Serial.available())
+        while (recievingSerial.available())
         {
+#if defined(ESP8266)
             ESP.wdtDisable();
-            int len = Serial.readBytesUntil('\n', telegram, P1_MAXLINELENGTH);
+#endif
+            int len = recievingSerial.readBytesUntil('\n', telegram, P1_MAXLINELENGTH);
+#if defined(ESP8266)
             ESP.wdtEnable(1);
+#endif
+            yield();
 
             processLine(len);
         }
@@ -440,51 +469,6 @@ void processLine(int len) {
         send_data_to_broker();
         LAST_UPDATE_SENT = millis();
     }
-}
-
-// **********************************
-// * EEPROM helpers                 *
-// **********************************
-
-String read_eeprom(int offset, int len)
-{
-    Serial.print(F("read_eeprom()"));
-
-    String res = "";
-    for (int i = 0; i < len; ++i)
-    {
-        res += char(EEPROM.read(i + offset));
-    }
-    return res;
-}
-
-void write_eeprom(int offset, int len, String value)
-{
-    Serial.println(F("write_eeprom()"));
-    for (int i = 0; i < len; ++i)
-    {
-        if ((unsigned)i < value.length())
-        {
-            EEPROM.write(i + offset, value[i]);
-        }
-        else
-        {
-            EEPROM.write(i + offset, 0);
-        }
-    }
-}
-
-// ******************************************
-// * Callback for saving WIFI config        *
-// ******************************************
-
-bool shouldSaveConfig = false;
-
-// * Callback notifying us of the need to save config
-void save_wifi_config_callback ()
-{
-    Serial.println(F("Should save config"));
-    shouldSaveConfig = true;
 }
 
 // **********************************
@@ -540,127 +524,103 @@ void setup_ota()
 // * Setup MDNS discovery service   *
 // **********************************
 
-void setup_mdns()
+// void setup_mdns()
+// {
+//     Serial.println(F("Starting MDNS responder service"));
+
+//     bool mdns_result = MDNS.begin(HOSTNAME);
+//     if (mdns_result)
+//     {
+//         MDNS.addService("http", "tcp", 80);
+//     }
+// }
+
+void wifiConnected()
 {
-    Serial.println(F("Starting MDNS responder service"));
-
-    bool mdns_result = MDNS.begin(HOSTNAME);
-    if (mdns_result)
-    {
-        MDNS.addService("http", "tcp", 80);
-    }
+  needMqttConnect = true;
 }
+void configSaved()
+{
+  Serial.println("Configuration was updated.");
+  needReset = true;
+}
+bool formValidator(iotwebconf::WebRequestWrapper* webRequestWrapper)
+{
+  Serial.println("Validating form.");
+  bool valid = true;
 
+  int l = webRequestWrapper->arg(mqttServerParam.getId()).length();
+  if (l < 3)
+  {
+    mqttServerParam.errorMessage = "Please provide at least 3 characters!";
+    valid = false;
+  }
+
+  return valid;
+}
 // **********************************
 // * Setup Main                     *
 // **********************************
 
 void setup()
 {
-    // * Configure EEPROM
-    EEPROM.begin(512);
-
-    // Setup a hw serial connection for communication with the P1 meter and logging (not using inversion)
+#if defined(ESP8266)
+    // Serial port setup for ESP8266
+    // Setup a hw serial connection for communication with the P1 meter and logging (not yet using inversion)
     Serial.begin(BAUD_RATE, SERIAL_8N1, SERIAL_FULL);
     Serial.println("");
     Serial.println("Swapping UART0 RX to inverted");
     Serial.flush();
-
-    // Invert the RX serialport by setting a register value, this way the TX might continue normally allowing the serial monitor to read println's
+    // Invert the RX serialport by setting a register value, this way the TX might continue normally allowing the arduino serial monitor to read printlns
     USC0(UART0) = USC0(UART0) | BIT(UCRXI);
+#endif
+
+#if defined(ESP32)
+    #define RXD2 16
+    #define TXD2 17
+    // Serial port setup for ESP32
+    Serial.begin(BAUD_RATE);
+    Serial2.begin(BAUD_RATE, SERIAL_8N1, RXD2, TXD2, true); // INVERT
+#endif
     Serial.println("Serial port is ready to recieve.");
 
     // * Set led pin as output
     pinMode(LED_BUILTIN, OUTPUT);
 
-    // * Start ticker with 0.5 because we start in AP mode and try to connect
-    ticker.attach(0.6, tick);
+    mqttGroup.addItem(&mqttServerParam);
+    mqttGroup.addItem(&mqttPortParam);
+    mqttGroup.addItem(&mqttUserNameParam);
+    mqttGroup.addItem(&mqttUserPasswordParam);
 
-    // * Get MQTT Server settings
-    String settings_available = read_eeprom(134, 1);
+    iotWebConf.setStatusPin(LED_BUILTIN);
+    // TODO look into setiting upt the config pin to enforce configuration mode.
+    //iotWebConf.setConfigPin(CONFIG_PIN);
+    iotWebConf.addParameterGroup(&mqttGroup);
+    iotWebConf.setConfigSavedCallback(&configSaved);
+    iotWebConf.setFormValidator(&formValidator);
+    iotWebConf.setWifiConnectionCallback(&wifiConnected);
 
-    if (settings_available == "1")
+    if (!iotWebConf.init())
     {
-        read_eeprom(0, 64).toCharArray(MQTT_HOST, 64);   // * 0-63
-        read_eeprom(64, 6).toCharArray(MQTT_PORT, 6);    // * 64-69
-        read_eeprom(70, 32).toCharArray(MQTT_USER, 32);  // * 70-101
-        read_eeprom(102, 32).toCharArray(MQTT_PASS, 32); // * 102-133
+        mqttServerValue[0] = '\0';
+        mqttPortValue[0] = '\0';
+        mqttUserNameValue[0] = '\0';
+        mqttUserPasswordValue[0] = '\0';
     }
 
-    WiFiManagerParameter CUSTOM_MQTT_HOST("host", "MQTT hostname", MQTT_HOST, 64);
-    WiFiManagerParameter CUSTOM_MQTT_PORT("port", "MQTT port",     MQTT_PORT, 6);
-    WiFiManagerParameter CUSTOM_MQTT_USER("user", "MQTT user",     MQTT_USER, 32);
-    WiFiManagerParameter CUSTOM_MQTT_PASS("pass", "MQTT pass",     MQTT_PASS, 32);
-
-    // * WiFiManager local initialization. Once its business is done, there is no need to keep it around
-    WiFiManager wifiManager;
-
-    // * Reset settings - uncomment for testing
-    // wifiManager.resetSettings();
-
-    // * Set callback that gets called when connecting to previous WiFi fails, and enters Access Point mode
-    wifiManager.setAPCallback(configModeCallback);
-
-    // * Set timeout
-    wifiManager.setConfigPortalTimeout(WIFI_TIMEOUT);
-
-    // * Set save config callback
-    wifiManager.setSaveConfigCallback(save_wifi_config_callback);
-
-    // * Add all your parameters here
-    wifiManager.addParameter(&CUSTOM_MQTT_HOST);
-    wifiManager.addParameter(&CUSTOM_MQTT_PORT);
-    wifiManager.addParameter(&CUSTOM_MQTT_USER);
-    wifiManager.addParameter(&CUSTOM_MQTT_PASS);
-
-    // * Fetches SSID and pass and tries to connect
-    // * Reset when no connection after 10 seconds
-    if (!wifiManager.autoConnect())
-    {
-        Serial.println(F("Failed to connect to WIFI and hit timeout"));
-
-        // * Reset and try again, or maybe put it to deep sleep
-        ESP.reset();
-        delay(WIFI_TIMEOUT);
-    }
-
-    // * Read updated parameters
-    strcpy(MQTT_HOST, CUSTOM_MQTT_HOST.getValue());
-    strcpy(MQTT_PORT, CUSTOM_MQTT_PORT.getValue());
-    strcpy(MQTT_USER, CUSTOM_MQTT_USER.getValue());
-    strcpy(MQTT_PASS, CUSTOM_MQTT_PASS.getValue());
-
-    // * Save the custom parameters to FS
-    if (shouldSaveConfig)
-    {
-        Serial.println(F("Saving WiFiManager config"));
-
-        write_eeprom(0, 64, MQTT_HOST);   // * 0-63
-        write_eeprom(64, 6, MQTT_PORT);   // * 64-69
-        write_eeprom(70, 32, MQTT_USER);  // * 70-101
-        write_eeprom(102, 32, MQTT_PASS); // * 102-133
-        write_eeprom(134, 1, "1");        // * 134 --> always "1"
-        EEPROM.commit();
-    }
-
-    // * If you get here you have connected to the WiFi
-    Serial.println(F("Connected to WIFI..."));
-
-    // * Keep LED on
-    ticker.detach();
-    digitalWrite(LED_BUILTIN, LOW);
+    // -- Set up required URL handlers on the web server.
+    server.on("/", handleRoot);
+    server.on("/config", []{ iotWebConf.handleConfig(); });
+    server.onNotFound([](){ iotWebConf.handleNotFound(); });
 
     // * Configure OTA
-    setup_ota();
+    //setup_ota();
 
     // * Startup MDNS Service
-    setup_mdns();
-
-    // * Setup MQTT
-    Serial.printf("MQTT connecting to: %s:%s\n", MQTT_HOST, MQTT_PORT);
-
-    mqtt_client.setServer(MQTT_HOST, atoi(MQTT_PORT));
-
+    //setup_mdns();
+    
+    mqtt_client.setServer(mqttServerValue, atoi(mqttPortValue));
+    Serial.println("Setup finished");
 }
 
 // **********************************
@@ -669,24 +629,22 @@ void setup()
 
 void loop()
 {
-    ArduinoOTA.handle();
+    delay(1000);
+    Serial.println("Do LOOP");
+    iotWebConf.doLoop();
+    mqtt_client.loop();
+    
+    //ArduinoOTA.handle();
     long now = millis();
 
-    if (!mqtt_client.connected())
-    {
-        if (now - LAST_RECONNECT_ATTEMPT > 5000)
-        {
-            LAST_RECONNECT_ATTEMPT = now;
-
-            if (mqtt_reconnect())
-            {
-                LAST_RECONNECT_ATTEMPT = 0;
-            }
-        }
+    if (needReset) { 
+        Serial.println("Configuration updated; Rebooting after 1 second.");
+        iotWebConf.delay(1000);
+        ESP.restart();
     }
-    else
-    {
-        mqtt_client.loop();
+
+    if ((iotWebConf.getState() == IOTWEBCONF_STATE_ONLINE) && !mqtt_client.connected()) {
+        mqtt_reconnect();
     }
     
     if (now - LAST_UPDATE_SENT > UPDATE_INTERVAL) {

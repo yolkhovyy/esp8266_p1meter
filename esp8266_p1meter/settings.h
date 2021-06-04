@@ -32,16 +32,19 @@
 // * MQTT root topic
 #define MQTT_ROOT_TOPIC "sensors/power/p1meter"
 
+// Size of strings stored in EEPROM
+#define STRING_LEN 128
+// Configuration specific key. The value should be modified if config structure was changed.
+#define CONFIG_VERSION "mqtt3"
+
+const char thingName[] = "p1meter";
+
+// -- Initial password to connect to the Thing, when it creates an own Access Point.
+const char wifiInitialApPassword[] = "smrtTHNG8266";
+
 // * MQTT Last reconnection counter
 long LAST_RECONNECT_ATTEMPT = 0;
-
 long LAST_UPDATE_SENT = 0;
-
-// * To be filled with EEPROM data
-char MQTT_HOST[64] = "";
-char MQTT_PORT[6]  = "";
-char MQTT_USER[32] = "";
-char MQTT_PASS[32] = "";
 
 // * Set to store received telegram
 char telegram[P1_MAXLINELENGTH];
