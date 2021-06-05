@@ -5,11 +5,9 @@
 #include <IotWebConf.h>
 #include <IotWebConfUsing.h>
 #include <WiFiUdp.h>
-#include <ArduinoOTA.h>
 #include <PubSubClient.h>
 #if defined(ESP8266)
 //#include <ESP8266WiFi.h>
-//#include <ESP8266mDNS.h>
     HardwareSerial recievingSerial = Serial;
 #endif
 #if defined(ESP32)
@@ -79,6 +77,7 @@ void handleRoot()
   String s = "<!DOCTYPE html><html lang=\"en\"><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, user-scalable=no\"/>";
   s += "<title>ESP_p1meter</title></head><body>";
   s += "<ul>";
+  s += "<li>Uptime: " + String(millis() / 1000) + " seconds</li>";
   s += "<li>Wifi state: " + String(iotWebConf.getState()) + " <i>(4 = connected, 3 = connecting, 2 = AP mode)</i></li>";
   s += "<li>MQTT state: " + String(mqtt_client.state())  + " <i>(0 = connected, negative numers = (re-)connecting, positive numbers = connection error with server)</i></li>";
   s += "<li>MQTT server: " + String(mqttServerValue) + ":" + String(mqttPortValue) + "</li>";
@@ -472,70 +471,6 @@ void processLine(int len) {
     }
 }
 
-// **********************************
-// * Setup OTA                      *
-// **********************************
-
-void setup_ota()
-{
-    Serial.println(F("Arduino OTA activated."));
-
-    // * Port defaults to 8266
-    ArduinoOTA.setPort(8266);
-
-    // * Set hostname for OTA
-    ArduinoOTA.setHostname(HOSTNAME);
-    ArduinoOTA.setPassword(OTA_PASSWORD);
-
-    ArduinoOTA.onStart([]()
-    {
-        Serial.println(F("Arduino OTA: Start"));
-    });
-
-    ArduinoOTA.onEnd([]()
-    {
-        Serial.println(F("Arduino OTA: End (Running reboot)"));
-    });
-
-    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
-    {
-        Serial.printf("Arduino OTA Progress: %u%%\r", (progress / (total / 100)));
-    });
-
-    ArduinoOTA.onError([](ota_error_t error)
-    {
-        Serial.printf("Arduino OTA Error[%u]: ", error);
-        if (error == OTA_AUTH_ERROR)
-            Serial.println(F("Arduino OTA: Auth Failed"));
-        else if (error == OTA_BEGIN_ERROR)
-            Serial.println(F("Arduino OTA: Begin Failed"));
-        else if (error == OTA_CONNECT_ERROR)
-            Serial.println(F("Arduino OTA: Connect Failed"));
-        else if (error == OTA_RECEIVE_ERROR)
-            Serial.println(F("Arduino OTA: Receive Failed"));
-        else if (error == OTA_END_ERROR)
-            Serial.println(F("Arduino OTA: End Failed"));
-    });
-
-    ArduinoOTA.begin();
-    Serial.println(F("Arduino OTA finished"));
-}
-
-// **********************************
-// * Setup MDNS discovery service   *
-// **********************************
-
-// void setup_mdns()
-// {
-//     Serial.println(F("Starting MDNS responder service"));
-
-//     bool mdns_result = MDNS.begin(HOSTNAME);
-//     if (mdns_result)
-//     {
-//         MDNS.addService("http", "tcp", 80);
-//     }
-// }
-
 void wifiConnected()
 {
   needMqttConnect = true;
@@ -603,6 +538,8 @@ void setup()
     iotWebConf.setFormValidator(&formValidator);
     iotWebConf.setWifiConnectionCallback(&wifiConnected);
 
+    //iotWebConf.setupUpdateServer();
+
     if (!iotWebConf.init())
     {
         mqttServerValue[0] = '\0';
@@ -615,12 +552,6 @@ void setup()
     server.on("/", handleRoot);
     server.on("/config", []{ iotWebConf.handleConfig(); });
     server.onNotFound([](){ iotWebConf.handleNotFound(); });
-
-    // * Configure OTA
-    //setup_ota();
-
-    // * Startup MDNS Service
-    //setup_mdns();
     
     mqtt_client.setServer(mqttServerValue, atoi(mqttPortValue));
     Serial.println("Setup finished");
@@ -635,7 +566,6 @@ void loop()
     iotWebConf.doLoop();
     mqtt_client.loop();
     
-    //ArduinoOTA.handle();
     long now = millis();
 
     if (needReset) { 
@@ -651,5 +581,4 @@ void loop()
     if ((iotWebConf.getState() == IOTWEBCONF_STATE_ONLINE) && mqtt_client.connected() && now - LAST_UPDATE_SENT > UPDATE_INTERVAL) {
         read_p1_hardwareserial();
     }
-    iotWebConf.delay(100);
 }
