@@ -442,7 +442,6 @@ void read_p1_hardwareserial()
     if (recievingSerial.available())
     {
         memset(telegram, 0, sizeof(telegram));
-
         while (recievingSerial.available())
         {
 #if defined(ESP8266)
@@ -573,6 +572,7 @@ void setup()
     Serial.flush();
     // Invert the RX serialport by setting a register value, this way the TX might continue normally allowing the arduino serial monitor to read printlns
     USC0(UART0) = USC0(UART0) | BIT(UCRXI);
+    recievingSerial = Serial;
 #endif
 
 #if defined(ESP32)
@@ -581,6 +581,7 @@ void setup()
     // Serial port setup for ESP32
     Serial.begin(BAUD_RATE);
     Serial2.begin(BAUD_RATE, SERIAL_8N1, RXD2, TXD2, true); // INVERT
+    recievingSerial = Serial2;
 #endif
     Serial.println("Serial port is ready to recieve.");
 
@@ -629,8 +630,6 @@ void setup()
 
 void loop()
 {
-    delay(1000);
-    Serial.println("Do LOOP");
     iotWebConf.doLoop();
     mqtt_client.loop();
     
@@ -647,7 +646,8 @@ void loop()
         mqtt_reconnect();
     }
     
-    if (now - LAST_UPDATE_SENT > UPDATE_INTERVAL) {
+    if ((iotWebConf.getState() == IOTWEBCONF_STATE_ONLINE) && mqtt_client.connected() && now - LAST_UPDATE_SENT > UPDATE_INTERVAL) {
         read_p1_hardwareserial();
     }
+    iotWebConf.delay(100);
 }
