@@ -79,8 +79,10 @@ void handleRoot()
   String s = "<!DOCTYPE html><html lang=\"en\"><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, user-scalable=no\"/>";
   s += "<title>ESP_p1meter</title></head><body>";
   s += "<ul>";
-  s += "<li>MQTT server: ";
-  s += mqttServerValue;
+  s += "<li>Wifi state: " + String(iotWebConf.getState()) + " <i>(4 = connected, 3 = connecting, 2 = AP mode)</i></li>";
+  s += "<li>MQTT state: " + String(mqtt_client.state())  + " <i>(0 = connected, negative numers = (re-)connecting, positive numbers = connection error with server)</i></li>";
+  s += "<li>MQTT server: " + String(mqttServerValue) + ":" + String(mqttPortValue) + "</li>";
+  s += "<li>Last telegram sent: " + String(LAST_UPDATE_SENT) + "</li>";
   s += "</ul>";
   s += "Go to <a href='config'>configure page</a> to change values.";
   s += "</body></html>\n";
