@@ -2,10 +2,11 @@
 #include <EEPROM.h>
 #include <DNSServer.h>
 #include <Ticker.h>
+#include <WiFiUdp.h>
 #include <IotWebConf.h>
 #include <IotWebConfUsing.h>
-#include <WiFiUdp.h>
 #include <PubSubClient.h>
+#include <ArduinoOTA.h>
 #if defined(ESP8266)
 //#include <ESP8266WiFi.h>
     HardwareSerial recievingSerial = Serial;
@@ -41,6 +42,7 @@ IotWebConfPasswordParameter mqttUserPasswordParam = IotWebConfPasswordParameter(
 
 bool needMqttConnect = false;
 bool needReset = false;
+bool otaStarted = false;
 
 // * Initiate MQTT client
 PubSubClient mqtt_client(espClient);
@@ -81,14 +83,13 @@ void handleRoot()
   s += "<li>Wifi state: " + String(iotWebConf.getState()) + " <i>(4 = connected, 3 = connecting, 2 = AP mode)</i></li>";
   s += "<li>MQTT state: " + String(mqtt_client.state())  + " <i>(0 = connected, negative numers = (re-)connecting, positive numbers = connection error with server)</i></li>";
   s += "<li>MQTT server: " + String(mqttServerValue) + ":" + String(mqttPortValue) + "</li>";
-  s += "<li>Last telegram sent: " + String(LAST_UPDATE_SENT) + "</li>";
+  s += "<li>Last telegram sent at: " + String(LAST_UPDATE_SENT / 1000) + " seconds</li>";
   s += "</ul>";
   s += "Go to <a href='config'>configure page</a> to change values.";
   s += "</body></html>\n";
 
   server.send(200, "text/html", s);
 }
-
 
 // * Reconnect to MQTT server and subscribe to in and out topics
 bool mqtt_reconnect()
@@ -263,7 +264,6 @@ bool decode_telegram(int len)
     for (int cnt = 0; cnt < len; cnt++) {
         Serial.print(telegram[cnt]);
     }
-    Serial.print("\n");
 
     if (startChar >= 0)
     {
@@ -440,22 +440,18 @@ bool decode_telegram(int len)
 
 void read_p1_hardwareserial()
 {
-    if (recievingSerial.available())
+    while (recievingSerial.available())
     {
         memset(telegram, 0, sizeof(telegram));
-        while (recievingSerial.available())
-        {
+        
 #if defined(ESP8266)
-            ESP.wdtDisable();
+        ESP.wdtDisable();
 #endif
-            int len = recievingSerial.readBytesUntil('\n', telegram, P1_MAXLINELENGTH);
+        int len = recievingSerial.readBytesUntil('\n', telegram, P1_MAXLINELENGTH);
 #if defined(ESP8266)
-            ESP.wdtEnable(1);
+        ESP.wdtEnable(1);
 #endif
-            yield();
-
-            processLine(len);
-        }
+        processLine(len);
     }
 }
 
@@ -466,6 +462,7 @@ void processLine(int len) {
 
     bool result = decode_telegram(len + 1);
     if (result) {
+        yield();
         send_data_to_broker();
         LAST_UPDATE_SENT = millis();
     }
@@ -475,11 +472,13 @@ void wifiConnected()
 {
   needMqttConnect = true;
 }
+
 void configSaved()
 {
   Serial.println("Configuration was updated.");
   needReset = true;
 }
+
 bool formValidator(iotwebconf::WebRequestWrapper* webRequestWrapper)
 {
   Serial.println("Validating form.");
@@ -494,10 +493,10 @@ bool formValidator(iotwebconf::WebRequestWrapper* webRequestWrapper)
 
   return valid;
 }
+
 // **********************************
 // * Setup Main                     *
 // **********************************
-
 void setup()
 {
 #if defined(ESP8266)
@@ -557,10 +556,24 @@ void setup()
     Serial.println("Setup finished");
 }
 
+void handleOTA()
+{
+    if (!otaStarted) {
+        otaStarted = true;
+        ArduinoOTA.setHostname(thingName);
+
+        ArduinoOTA.onStart([]() {
+            Serial.println("Starting OTA update");
+        });
+        ArduinoOTA.begin();
+    } else {
+        ArduinoOTA.handle();
+    }
+}
+
 // **********************************
 // * Loop                           *
 // **********************************
-
 void loop()
 {
     iotWebConf.doLoop();
@@ -570,15 +583,19 @@ void loop()
 
     if (needReset) { 
         Serial.println("Configuration updated; Rebooting after 1 second.");
+        Serial.flush();
         iotWebConf.delay(1000);
         ESP.restart();
     }
 
-    if ((iotWebConf.getState() == IOTWEBCONF_STATE_ONLINE) && !mqtt_client.connected()) {
-        mqtt_reconnect();
-    }
-    
-    if ((iotWebConf.getState() == IOTWEBCONF_STATE_ONLINE) && mqtt_client.connected() && now - LAST_UPDATE_SENT > UPDATE_INTERVAL) {
-        read_p1_hardwareserial();
+    if (iotWebConf.getState() == 4) {
+        handleOTA();
+
+        if (!mqtt_client.connected()) {
+            mqtt_reconnect();
+        }
+        if (mqtt_client.connected() && now - LAST_UPDATE_SENT > UPDATE_INTERVAL) {
+            read_p1_hardwareserial();
+        }
     }
 }
