@@ -17,12 +17,10 @@ This setup requires:
 Compiling up using Arduino IDE:
 - Ensure you have selected the right board
 - Using the Tools->Manage Libraries... install `PubSubClient` and `WifiManager`
-- In the file `Settings.h` change `OTA_PASSWORD` to a safe secret value
 - Flash the software
 
 Compiling up using PlatformIO:
 - Ensure the correct board type is selected in project configuration
-- In the file `Settings.h` change `OTA_PASSWORD` to a safe secret value
 - Upload the software.
 
 Finishing off:

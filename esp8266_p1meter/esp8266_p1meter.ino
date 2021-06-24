@@ -38,6 +38,7 @@ IotWebConfParameterGroup mqttGroup = IotWebConfParameterGroup("mqtt", "MQTT conf
 IotWebConfTextParameter mqttServerParam = IotWebConfTextParameter("MQTT server", "mqttServer", mqttServerValue, STRING_LEN);
 IotWebConfNumberParameter mqttPortParam = IotWebConfNumberParameter("MQTT port", "mqttPort", mqttPortValue, 5, "1883");
 IotWebConfTextParameter mqttUserNameParam = IotWebConfTextParameter("MQTT user", "mqttUser", mqttUserNameValue, STRING_LEN);
+// TODO note somewhere in the UI that leaving the PW empty in the UI will not update/clear its value in EEPROM.
 IotWebConfPasswordParameter mqttUserPasswordParam = IotWebConfPasswordParameter("MQTT password", "mqttPass", mqttUserPasswordValue, STRING_LEN);
 
 bool needMqttConnect = false;
@@ -536,7 +537,6 @@ void setup()
     iotWebConf.setConfigSavedCallback(&configSaved);
     iotWebConf.setFormValidator(&formValidator);
     iotWebConf.setWifiConnectionCallback(&wifiConnected);
-
     //iotWebConf.setupUpdateServer();
 
     if (!iotWebConf.init())
@@ -561,6 +561,10 @@ void handleOTA()
     if (!otaStarted) {
         otaStarted = true;
         ArduinoOTA.setHostname(thingName);
+
+        // Also use the IotWebconf AP password for OTA
+        char* apPassword = iotWebConf.getApPasswordParameter()->valueBuffer;
+        ArduinoOTA.setPassword(apPassword);
 
         ArduinoOTA.onStart([]() {
             Serial.println("Starting OTA update");
