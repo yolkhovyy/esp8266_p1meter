@@ -1,7 +1,6 @@
 #include <FS.h>
 #include <EEPROM.h>
 #include <DNSServer.h>
-#include <Ticker.h>
 #include <WiFiUdp.h>
 #include <IotWebConf.h>
 #include <IotWebConfUsing.h>
@@ -18,12 +17,8 @@
 // * Include settings
 #include "settings.h"
 
-// * Initiate led blinker library
-Ticker ticker;
-
 // * Initiate WIFI client
 WiFiClient espClient;
-
 DNSServer dnsServer;
 WebServer server(80);
 WiFiClient net;
@@ -33,13 +28,12 @@ char mqttPortValue[5];
 char mqttUserNameValue[STRING_LEN];
 char mqttUserPasswordValue[STRING_LEN];
 
-IotWebConf iotWebConf(thingName, &dnsServer, &server, wifiInitialApPassword, CONFIG_VERSION);
+IotWebConf iotWebConf(HOSTNAME, &dnsServer, &server, wifiInitialApPassword, CONFIG_VERSION);
 IotWebConfParameterGroup mqttGroup = IotWebConfParameterGroup("mqtt", "MQTT configuration");
 IotWebConfTextParameter mqttServerParam = IotWebConfTextParameter("MQTT server", "mqttServer", mqttServerValue, STRING_LEN);
 IotWebConfNumberParameter mqttPortParam = IotWebConfNumberParameter("MQTT port", "mqttPort", mqttPortValue, 5, "1883");
 IotWebConfTextParameter mqttUserNameParam = IotWebConfTextParameter("MQTT user", "mqttUser", mqttUserNameValue, STRING_LEN);
-// TODO note somewhere in the UI that leaving the PW empty in the UI will not update/clear its value in EEPROM.
-IotWebConfPasswordParameter mqttUserPasswordParam = IotWebConfPasswordParameter("MQTT password", "mqttPass", mqttUserPasswordValue, STRING_LEN);
+IotWebConfPasswordParameter mqttUserPasswordParam = IotWebConfPasswordParameter("MQTT password", "mqttPass", mqttUserPasswordValue, STRING_LEN, NULL, passwordPlaceholder);
 
 bool needMqttConnect = false;
 bool needReset = false;
@@ -84,9 +78,9 @@ void handleRoot()
   s += "<li>Wifi state: " + String(iotWebConf.getState()) + " <i>(4 = connected, 3 = connecting, 2 = AP mode)</i></li>";
   s += "<li>MQTT state: " + String(mqtt_client.state())  + " <i>(0 = connected, negative numers = (re-)connecting, positive numbers = connection error with server)</i></li>";
   s += "<li>MQTT server: " + String(mqttServerValue) + ":" + String(mqttPortValue) + "</li>";
-  s += "<li>Last telegram sent at: " + String(LAST_UPDATE_SENT / 1000) + " seconds</li>";
+  s += "<li>Last telegram sent at: " + String(LAST_UPDATE_SENT / 1000) + " seconds uptime</li>";
   s += "</ul>";
-  s += "Go to <a href='config'>configure page</a> to change values.";
+  s += "Go to <a href='config'>configure page</a> to change values. Please note that all password are only update when a new value is provided, and thus are not required for just changing lets say the Mqtt username.";
   s += "</body></html>\n";
 
   server.send(200, "text/html", s);
@@ -114,7 +108,6 @@ bool mqtt_reconnect()
             char *message = new char[16 + strlen(HOSTNAME) + 1];
             strcpy(message, "p1 meter alive: ");
             strcat(message, HOSTNAME);
-            // TODO set to homeassistant/status
             mqtt_client.publish("hass/status", message); 
 
             Serial.printf("MQTT root topic: %s\n", MQTT_ROOT_TOPIC);
@@ -128,7 +121,7 @@ bool mqtt_reconnect()
 
             // * Wait 5 seconds before retrying
             yield();
-            iotWebConf.delay(2000);
+            iotWebConf.delay(5000);
         }
     }
 
@@ -525,19 +518,21 @@ void setup()
     // * Set led pin as output
     pinMode(LED_BUILTIN, OUTPUT);
 
+    // Setup IotWebConf custom configuration values
     mqttGroup.addItem(&mqttServerParam);
     mqttGroup.addItem(&mqttPortParam);
     mqttGroup.addItem(&mqttUserNameParam);
     mqttGroup.addItem(&mqttUserPasswordParam);
 
     iotWebConf.setStatusPin(LED_BUILTIN);
-    // TODO look into setiting upt the config pin to enforce configuration mode.
-    //iotWebConf.setConfigPin(CONFIG_PIN);
     iotWebConf.addParameterGroup(&mqttGroup);
     iotWebConf.setConfigSavedCallback(&configSaved);
     iotWebConf.setFormValidator(&formValidator);
     iotWebConf.setWifiConnectionCallback(&wifiConnected);
-    //iotWebConf.setupUpdateServer();
+    
+    // Enter a UI placeholder text for the buildin password fields.
+    ((iotwebconf::PasswordParameter*)iotWebConf.getApPasswordParameter())->placeholder = passwordPlaceholder;
+    ((iotwebconf::PasswordParameter*)iotWebConf.getWifiPasswordParameter())->placeholder = passwordPlaceholder;
 
     if (!iotWebConf.init())
     {
@@ -560,7 +555,7 @@ void handleOTA()
 {
     if (!otaStarted) {
         otaStarted = true;
-        ArduinoOTA.setHostname(thingName);
+        ArduinoOTA.setHostname(HOSTNAME);
 
         // Also use the IotWebconf AP password for OTA
         char* apPassword = iotWebConf.getApPasswordParameter()->valueBuffer;
