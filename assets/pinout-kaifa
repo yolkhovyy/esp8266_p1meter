@@ -1,0 +1,9 @@
+Pinout – P1-poort – Kaifa MA105 en MA304
+kaifa ma105 meter	 
+Pin:	Functie:
+1	NC (Not Connected)
+2	RTS (Request to Send)
+3	GND (Ground)
+4	NC (Not Connected)
+5	TxD (Transmit data)
+6	NC (Not Connected)
